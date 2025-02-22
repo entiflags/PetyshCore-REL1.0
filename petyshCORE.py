@@ -14,11 +14,17 @@ class VideoController:
         self.mode = 0x03
         self.pallete = [(0,0,0)] * 16
         self.init_graphic_mode()
+        self.clear_screen()
 
     def clear_screen(self):
         self.vram = [0x20, 0x07] * (self.width * self.height)
         self.cursor_x = 0
         self.cursor_y = 0
+
+    def scroll_screen(self):
+        self.vram = self.vram[self.width*2:]
+        self.vram += [0x20, self.attr] * self.width
+        self.cursor_y = self.height - 1 
 
     def set_color(self, color):
         self.attr = color
@@ -38,6 +44,22 @@ class VideoController:
             self.vram += [0x20, self.attr] * self.width
             self.cursor_y = self.height - 1
 
+    def get_display_output(self):
+        output = []
+        for y in range(self.height):
+            line = []
+            for x in range(self.width):
+                pos = (y * self.width + x) * 2
+                char_code = self.vram[pos]
+                char = chr(char_code) if 32 <= char_code < 127 else ''
+                attr = self.vram[pos+1]
+                fg = attr & 0x0F
+                bg = (attr >> 4) & 0x07
+                line.append(f"\x1b[38;5;{fg}m\x1b[48;5;{bg}m{char}\x1b[0m")
+            output.append(''.join(line))
+        return '\n'.join(output)
+
+
     def put_char(self, char, attr=None):
         if attr is None:
             attr = self.attr
@@ -49,11 +71,12 @@ class VideoController:
             self.cursor_x = 0
             return
 
-        pos = (self.cursor_y * self.width + self.cursor_x) * 2
-        self.vram[pos] = ord(char)
-        self.vram[pos+1] = attr
+        pos = (self.cursor_y * self.width + self.height)
+        if pos + 1 < len(self.vram):
+            self.vram[pos] = ord(char)
+            self.vram[pos+1] = attr
+
         self.cursor_x += 1
-        
         if self.cursor_x >= self.width:
             self.new_line()
 
@@ -194,6 +217,9 @@ class PetyshCore16:
         if function == 0x0E00:  
             char = chr(self.registers['AX'] & 0x00FF)
             self.vc.put_char(char)
+            self.show_video_output()
+            self.vc.cursor_x = min(self.vc.cursor_x, self.vc.width-1)
+            self.vc.cursor_y = min(self.vc.cursor_y, self.vc.height-1)
         elif function == 0x0200: 
             self.vc.cursor_x = self.registers['DX'] & 0xFF
             self.vc.cursor_y = (self.registers['DX'] >> 8) & 0xFF
@@ -399,6 +425,7 @@ class PetyshCore16:
                 self.gdt[i//8] = entry
 
     def step_debug(self):
+        print("\x1b[2J\x1b[H")
         self.debug_show_registers()
         self.debug_disassemble_text()
         input("Press enter to continue...")
@@ -475,12 +502,7 @@ class PetyshCore16:
             print(f"{i:02X}: {' '.join(f'{self.memory[page*256 + i + j]:02X}' for j in range(16))}")
 
     def show_video_output(self):
-        for y in range(self.vc.height):
-            line = ''
-            for x in range(self.vc.width):
-                pos = (y * self.vc.width + x) * 2
-                line += chr(self.vc.vram[pos])
-            print(line)
+        print("\x1b[H" + self.vc.get_display_output())
 
     def update_logic_flags(self):
         self.registers['FLAGS'] = 0b00000000
@@ -892,22 +914,12 @@ class PetyshCore16:
 if __name__ == "__main__":
     cpu = PetyshCore16()
     program = [
-        0xB4, 0x0E, 0xB0, 0x48, 0xCD, 0x10,
-        0xB4, 0x0E, 0xB0, 0x65, 0xCD, 0x10,
-        0xB4, 0x0E, 0xB0, 0x6C, 0xCD, 0x10,
-        0xB4, 0x0E, 0xB0, 0x6C, 0xCD, 0x10,
-        0xB4, 0x0E, 0xB0, 0x6F, 0xCD, 0x10,
-        0xB4, 0x0E, 0xB0, 0x2C, 0xCD, 0x10,
-        0xB4, 0x0E, 0xB0, 0x20, 0xCD, 0x10,
-        0xB4, 0x0E, 0xB0, 0x77, 0xCD, 0x10,
-        0xB4, 0x0E, 0xB0, 0x6F, 0xCD, 0x10,
-        0xB4, 0x0E, 0xB0, 0x72, 0xCD, 0x10,
-        0xB4, 0x0E, 0xB0, 0x6C, 0xCD, 0x10,
-        0xB4, 0x0E, 0xB0, 0x64, 0xCD, 0x10,
-        0xB4, 0x0E, 0xB0, 0x21, 0xCD, 0x10,
-        0xB4, 0x4C, 0xCD, 0x21
+        
     ]
     cpu.load_program(program)
+    cpu.vc.set_color(0x1E)
+    cpu.vc.put_char('A')
+    cpu.show_video_output()
     cpu.add_key_input("A")
 
     try:
